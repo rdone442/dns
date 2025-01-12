@@ -19,7 +19,40 @@ import re
 # 如果存在.env文件，则作为补充配置源
 env_path = Path(__file__).parent / '.env'
 if env_path.exists():
+    print(f"Loading config from {env_path}")
     load_dotenv(env_path, override=False)  # override=False表示不覆盖已存在的环境变量
+
+# Cloudflare配置
+CF_API_TOKEN = os.environ.get('CF_API_TOKEN')
+CF_ZONE_ID = os.environ.get('CF_ZONE_ID')
+CF_BASE_DOMAIN = os.environ.get('CF_BASE_DOMAIN')
+API_BASE_URL = os.environ.get('API_BASE_URL')
+
+print(f"Initial API_BASE_URL: {API_BASE_URL}")
+
+if not API_BASE_URL:
+    raise ValueError("API_BASE_URL environment variable is not set")
+
+# 确保API_BASE_URL是完整的URL
+if not API_BASE_URL.startswith(('http://', 'https://')):
+    API_BASE_URL = f"https://{API_BASE_URL}"
+    print(f"Updated API_BASE_URL: {API_BASE_URL}")
+
+print(f"Using API base URL: {API_BASE_URL}")
+
+# CloudflareSpeedTest配置
+SPEEDTEST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), 'speedtest'))  # 保存目录
+IP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ip'))  # IP结果保存目录
+SPEEDTEST_FILENAME = 'CloudflareST.exe' if platform.system().lower() == 'windows' else 'CloudflareST'  # 可执行文件名
+SPEEDTEST_PATH = os.path.join(SPEEDTEST_DIR, SPEEDTEST_FILENAME)  # 可执行文件路径
+TEST_COUNT = os.environ.get('TEST_COUNT', '2')  # 延迟测试次数
+DOWNLOAD_TIMEOUT = os.environ.get('DOWNLOAD_TIMEOUT', '5')  # 下载测试超时时间(秒)
+MAX_RESULT = os.environ.get('MAX_RESULT', '3')  # 最多使用几个IP
+MAX_LATENCY = os.environ.get('MAX_LATENCY', '500')  # 延迟时间上限(ms)
+
+# Telegram配置
+TG_BOT_TOKEN = os.environ.get('TG_BOT_TOKEN')
+TG_CHAT_ID = os.environ.get('TG_CHAT_ID')
 
 def parse_config(config_path):
     """解析配置文件"""
@@ -41,35 +74,6 @@ def parse_config(config_path):
     except Exception as e:
         print(f"读取配置文件出错: {str(e)}")
     return config
-
-# Cloudflare配置
-CF_API_TOKEN = os.environ.get('CF_API_TOKEN')
-CF_ZONE_ID = os.environ.get('CF_ZONE_ID')
-CF_BASE_DOMAIN = os.environ.get('CF_BASE_DOMAIN')
-API_BASE_URL = os.environ.get('API_BASE_URL')
-
-if not API_BASE_URL:
-    raise ValueError("API_BASE_URL environment variable is not set")
-
-# 确保API_BASE_URL是完整的URL
-if not API_BASE_URL.startswith(('http://', 'https://')):
-    API_BASE_URL = f"https://{API_BASE_URL}"
-
-print(f"Using API base URL: {API_BASE_URL}")
-
-# CloudflareSpeedTest配置
-SPEEDTEST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), 'speedtest'))  # 保存目录
-IP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ip'))  # IP结果保存目录
-SPEEDTEST_FILENAME = 'CloudflareST.exe' if platform.system().lower() == 'windows' else 'CloudflareST'  # 可执行文件名
-SPEEDTEST_PATH = os.path.join(SPEEDTEST_DIR, SPEEDTEST_FILENAME)  # 可执行文件路径
-TEST_COUNT = os.environ.get('TEST_COUNT', '2')  # 延迟测试次数
-DOWNLOAD_TIMEOUT = os.environ.get('DOWNLOAD_TIMEOUT', '5')  # 下载测试超时时间(秒)
-MAX_RESULT = os.environ.get('MAX_RESULT', '3')  # 最多使用几个IP
-MAX_LATENCY = os.environ.get('MAX_LATENCY', '500')  # 延迟时间上限(ms)
-
-# Telegram配置
-TG_BOT_TOKEN = os.environ.get('TG_BOT_TOKEN')
-TG_CHAT_ID = os.environ.get('TG_CHAT_ID')
 
 def check_speedtest():
     """检查CloudflareSpeedTest是否可用"""
