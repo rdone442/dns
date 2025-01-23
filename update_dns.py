@@ -15,6 +15,29 @@ from tqdm import tqdm
 import time
 import re
 
+def is_valid_ip(ip):
+    """验证IP地址格式是否正确（检查前导零和IP段范围）"""
+    try:
+        parts = ip.split('.')
+        # 检查是否正好4段
+        if len(parts) != 4:
+            return False
+        # 检查每段是否为有效数字且在0-255范围内
+        for part in parts:
+            if not part.isdigit():
+                return False
+            # 检查是否有前导零
+            if len(part) > 1 and part[0] == '0':
+                return False
+            # 检查是否在0-255范围内
+            num = int(part)
+            if num < 0 or num > 255:
+                print(f"IP段超出范围(0-255): {part}")
+                return False
+        return True
+    except:
+        return False
+
 # 优先从环境变量加载配置
 # 如果存在.env文件，则作为补充配置源
 env_path = Path(__file__).parent / '.env'
@@ -265,9 +288,21 @@ def get_region_ips(api_url):
         
         data = response.json()
         if data['status'] == 'success':
-            ips = [proxy['ip'] for proxy in data['proxies']]
-            print(f"成功获取到 {len(ips)} 个IP")
-            return ips if ips else None
+            valid_ips = []
+            for proxy in data['proxies']:
+                ip = proxy['ip']
+                if not is_valid_ip(ip):
+                    print(f"发现无效IP: {ip}")
+                    # 删除无效IP
+                    if delete_invalid_ip(api_url, ip):
+                        print(f"已删除无效IP: {ip}")
+                    else:
+                        print(f"删除无效IP失败: {ip}")
+                else:
+                    valid_ips.append(ip)
+                    
+            print(f"成功获取到 {len(valid_ips)} 个有效IP")
+            return valid_ips if valid_ips else None
         else:
             print(f"API返回失败状态: {data['status']}")
     except Exception as e:
@@ -277,6 +312,38 @@ def get_region_ips(api_url):
             import traceback
             print(f"错误堆栈: {traceback.format_exc()}")
     return None
+
+def delete_invalid_ip(api_url, ip):
+    """删除无效的IP地址"""
+    try:
+        # 构建删除API的URL
+        base_url = api_url.rstrip('/')
+        if '/list' in base_url:
+            # 如果base_url已经包含/list，直接添加IP
+            delete_url = f"{base_url}/{ip}"
+        else:
+            # 否则添加/list/ip
+            delete_url = f"{base_url}/list/{ip}"
+            
+        print(f"正在删除无效IP: {ip}")
+        print(f"删除URL: {delete_url}")
+        
+        # 发送DELETE请求
+        response = session.delete(delete_url)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == 'success':
+                print(f"成功删除IP: {ip}")
+                return True
+            else:
+                print(f"删除IP失败: {data.get('message')}")
+        else:
+            print(f"删除请求失败，状态码: {response.status_code}")
+            
+    except Exception as e:
+        print(f"删除IP时发生错误: {str(e)}")
+    return False
 
 def test_ips_speed(ips, region):
     """使用CloudflareSpeedTest测试IP速度"""
@@ -305,117 +372,155 @@ def test_ips_speed(ips, region):
             print(f"错误: IP目录不可写: {str(e)}")
             return None
         
-        # 创建临时文件来存储IP列表
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as temp_ip_file:
-            print(f"创建IP列表文件: {temp_ip_file.name}")
-            for ip in ips:
-                temp_ip_file.write(f"{ip}\n")
-                
-        # 创建结果文件路径（使用地区名命名）
+        # 保存当前的IP列表
+        current_ips = ips.copy()
+        temp_file_path = None
         result_file = os.path.join(IP_DIR, f"{region}.csv")
         
-        # 构建命令
-        cmd = [
-            SPEEDTEST_PATH,
-            '-f', temp_ip_file.name,    # IP列表文件
-            '-o', result_file,          # 结果文件
-        ]
-        
-        # 读取配置文件
-        config_path = os.environ.get('SPEEDTEST_CONFIG', 'config.conf')
-        config_path = os.path.join(os.path.dirname(__file__), config_path)
-        
-        if os.path.exists(config_path):
-            print(f"使用配置文件: {config_path}")
-            config_params = parse_config(config_path)
-            cmd.extend(config_params)
-        else:
-            print(f"配置文件不存在: {config_path}, 使用默认参数")
-            # 使用默认参数
-            cmd.extend([
-                '-n', '200',    # 延迟测速线程数
-                '-t', '4',      # 延迟测速次数
-                '-tp', '443',   # 测速端口
-                '-tl', '500',   # 延迟上限
-                '-sl', '10',    # 选择的IP数量
-                '-dd'           # 禁用下载测速
-            ])
-        
-        print("开始测速...")
-        print(f"执行命令: {' '.join(cmd)}")
-        
-        # 执行命令
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        # 获取输出
-        stdout, stderr = process.communicate()
-        print("CloudflareST输出:")
-        print(stdout)
-        if stderr:
-            print("CloudflareST错误:")
-            print(stderr)
-        print(f"CloudflareST返回码: {process.returncode}")
-        
-        # 检查结果文件
-        if not os.path.exists(result_file):
-            print(f"结果文件不存在: {result_file}")
-            return None
-            
-        if os.path.getsize(result_file) == 0:
-            print("结果文件为空")
-            return None
-            
-        print(f"结果文件存在: {result_file}")
-        print(f"结果文件大小: {os.path.getsize(result_file)} 字节")
-        
-        # 读取结果文件
-        result_ips = []
-        with open(result_file, 'r', encoding='utf-8') as f:
-            print("结果文件内容:")
-            content = f.read()
-            print(content)
-            
-            # 重新读取文件来处理IP
-            f.seek(0)
-            next(f)  # 跳过标题行
-            for line in f:
-                if line.strip():
-                    ip = line.split(',')[0].strip()
-                    result_ips.append(ip)
+        # 第一次运行，找出所有不支持的IP
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as temp_ip_file:
+                temp_file_path = temp_ip_file.name
+                print(f"创建IP列表文件: {temp_file_path}")
+                for ip in current_ips:
+                    temp_ip_file.write(f"{ip}\n")
                     
-        if not result_ips:
-            print("未找到有效的IP")
-            return None
+            cmd = [SPEEDTEST_PATH, '-f', temp_file_path, '-o', result_file]
+            config_path = os.environ.get('SPEEDTEST_CONFIG', 'config.conf')
+            config_path = os.path.join(os.path.dirname(__file__), config_path)
             
-        print(f"测速完成，获取到 {len(result_ips)} 个有效IP")
-        
-        # 创建txt格式的结果文件
-        txt_file = os.path.join(IP_DIR, f"{region}.txt")
-        with open(txt_file, 'w', encoding='utf-8') as f:
-            for ip in result_ips:
-                f.write(f"{ip}#{region}\n")
-        print(f"已生成txt格式结果文件: {txt_file}")
-        
-        return result_ips
+            if os.path.exists(config_path):
+                print(f"使用配置文件: {config_path}")
+                config_params = parse_config(config_path)
+                cmd.extend(config_params)
+            else:
+                print(f"配置文件不存在: {config_path}, 使用默认参数")
+                cmd.extend(['-n', '200', '-t', '4', '-tp', '443', '-tl', '500', '-sl', '10', '-dd'])
+            
+            print("开始测速...")
+            print(f"执行命令: {' '.join(cmd)}")
+            
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            stdout, stderr = process.communicate()
+            print("CloudflareST输出:")
+            print(stdout)
+            
+            # 处理不支持的IP
+            if stderr:
+                print("CloudflareST错误:")
+                print(stderr)
+                if "ParseCIDR err invalid CIDR address:" in stderr:
+                    matches = re.finditer(r"invalid CIDR address: ([\d.]+)/32", stderr)
+                    for match in matches:
+                        invalid_ip = match.group(1)
+                        if invalid_ip in current_ips:
+                            print(f"跳过不支持的IP: {invalid_ip}")
+                            current_ips.remove(invalid_ip)
+            
+            # 清理临时文件
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                    print("已删除IP列表文件")
+                except Exception as e:
+                    print(f"清理临时文件出错: {str(e)}")
+                temp_file_path = None
+            
+            print(f"CloudflareST返回码: {process.returncode}")
+            
+            # 如果没有剩余的IP，退出
+            if not current_ips:
+                print("没有剩余的有效IP")
+                return None
+            
+            # 使用剩余的IP重新测试
+            print("使用剩余的有效IP重新测试...")
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as temp_ip_file:
+                temp_file_path = temp_ip_file.name
+                print(f"创建新的IP列表文件: {temp_file_path}")
+                for ip in current_ips:
+                    temp_ip_file.write(f"{ip}\n")
+                    
+            cmd = [SPEEDTEST_PATH, '-f', temp_file_path, '-o', result_file]
+            if os.path.exists(config_path):
+                cmd.extend(config_params)
+            else:
+                cmd.extend(['-n', '200', '-t', '4', '-tp', '443', '-tl', '500', '-sl', '10', '-dd'])
+            
+            print(f"执行命令: {' '.join(cmd)}")
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            stdout, stderr = process.communicate()
+            print("CloudflareST输出:")
+            print(stdout)
+            if stderr:
+                print("CloudflareST错误:")
+                print(stderr)
+            
+            # 清理临时文件
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                    print("已删除IP列表文件")
+                except Exception as e:
+                    print(f"清理临时文件出错: {str(e)}")
+                
+            # 检查结果文件
+            if not os.path.exists(result_file):
+                print(f"结果文件不存在: {result_file}")
+                return None
+                
+            if os.path.getsize(result_file) == 0:
+                print("结果文件为空")
+                return None
+            
+            print(f"结果文件存在: {result_file}")
+            print(f"结果文件大小: {os.path.getsize(result_file)} 字节")
+            
+            # 读取结果文件
+            result_ips = []
+            with open(result_file, 'r', encoding='utf-8') as f:
+                print("结果文件内容:")
+                content = f.read()
+                print(content)
+                
+                # 重新读取文件来处理IP
+                f.seek(0)
+                next(f)  # 跳过标题行
+                for line in f:
+                    if line.strip():
+                        ip = line.split(',')[0].strip()
+                        result_ips.append(ip)
+                        
+            if not result_ips:
+                print("未找到有效的IP")
+                return None
+                
+            print(f"测速完成，获取到 {len(result_ips)} 个有效IP")
+            
+            # 创建txt格式的结果文件
+            txt_file = os.path.join(IP_DIR, f"{region}.txt")
+            with open(txt_file, 'w', encoding='utf-8') as f:
+                for ip in result_ips:
+                    f.write(f"{ip}#{region}\n")
+            print(f"已生成txt格式结果文件: {txt_file}")
+            
+            return result_ips
+                
+        except Exception as e:
+            print(f"测试过程出错: {str(e)}")
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                    print("已删除IP列表文件")
+                except Exception as e:
+                    print(f"清理临时文件出错: {str(e)}")
+            return None
             
     except Exception as e:
         print(f"测速过程出错: {str(e)}")
         import traceback
         print(f"错误堆栈: {traceback.format_exc()}")
         return None
-    finally:
-        # 清理临时文件
-        try:
-            if 'temp_ip_file' in locals():
-                os.unlink(temp_ip_file.name)
-                print("已删除IP列表文件")
-        except Exception as e:
-            print(f"清理临时文件出错: {str(e)}")
 
 def create_dns_records(headers, url, record_name, ips):
     """创建新的DNS记录"""
